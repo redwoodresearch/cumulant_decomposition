@@ -27,6 +27,13 @@ def partitions(items: frozenset[int]) -> list[Partition]:
     return [Partition([Block(b) for b in part]) for part in parts]
 
 
+@lru_cache(maxsize=None)
+def factorial(n: int) -> int:
+    if n == 0 or n == 1:
+        return 1
+    return n * factorial(n - 1)
+
+
 def remove_zeros(d: dict[T, int]) -> dict[T, int]:
     """Strip all items where value is zero.
 
@@ -96,6 +103,7 @@ assert kf(part([[0, 1], [2, 3]])) == {
 }
 # %%
 # Note the SymPy ordering is different than the paper - we have the joint first and the independent last.
+# KF is fast because cached, but this function is pretty slow because the number of cells goes up quickly (Bell number squared)
 def matrix_form(n: int):
     parts = partitions(frozenset(range(n)))
     out = np.zeros((len(parts), len(parts)), dtype=np.int64)
@@ -109,5 +117,16 @@ print(matrix_form(2))
 print(matrix_form(3))
 print(matrix_form(4))
 # %%
-
 # %%
+def joint_coefs(n: int):
+    """Coefficients of the joint term E_XYZ and also generally K_f_XYZ.
+
+    Given by https://en.wikipedia.org/wiki/Cumulant#Joint_cumulants though not derived there.
+    """
+    return [factorial(len(pi) - 1) * (-1) ** (len(pi) - 1) for pi in partitions(frozenset(range(n)))]
+
+
+# Check closed form for joint matches the recursive definition
+# (In SymPy ordering the joint is the first row)
+for n in range(1, 6):
+    assert (matrix_form(n)[0] == joint_coefs(n)).all()
