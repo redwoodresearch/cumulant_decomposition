@@ -154,8 +154,27 @@ Term = tuple[Expectation, Xs]
 
 
 def mul_expectation(e1: Expectation, e2: Expectation):
-    """Handle E_w|x E_yz E_{} = E_w|x|yz."""
-    return frozenset([e for e in e1 | e2 if e])
+    """Handle E_w|x E_yz = E_w|x|yz. Can have empty E_{} as well."""
+    # invariant: each variable only appears once in all parts
+    out = set()
+    seen = set()
+    for term in chain(e1, e2):
+        for i in term:
+            if i in seen:
+                raise Exception(f"Repeated variable {i}")
+            seen.add(i)
+        if term:
+            out.add(term)
+    return frozenset(out)
+    # return frozenset([e for e in e1 | e2 if e]) # fast version
+
+
+e1 = frozenset([frozenset([1, 2])])
+e2 = frozenset([frozenset([3])])
+assert mul_expectation(e1, e2) == frozenset({frozenset({3}), frozenset({1, 2})})
+
+
+# %%
 
 
 def wick(x_s: Block) -> dict[Term, int]:
@@ -169,10 +188,10 @@ def wick(x_s: Block) -> dict[Term, int]:
             return {(frozenset([frozenset()]), frozenset()): 1}
 
         terms: dict[Term, int] = defaultdict(int)
-        terms[(frozenset([frozenset()]), x_s)] = 1  # product over all x_i
+        terms[(frozenset([frozenset()]), s)] = 1  # product over all x_i
         for subset in powerset(s, min=0, max=len(s) - 1):  # strict subsets
-            rest = frozenset([frozenset([i for i in x_s if i not in subset])])  # [n] \ S
-            # distribute rest into each subterm by linearity of expectation
+            rest = frozenset([frozenset([i for i in s if i not in subset])])  # [n] \ S
+            # distribute expectation over rest into each subterm by linearity of expectation
             for (sub_ex, sub_xs), sub_coef in _wick(frozenset(subset)).items():
                 key = mul_expectation(rest, sub_ex), sub_xs
                 terms[key] -= sub_coef
