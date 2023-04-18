@@ -1,5 +1,5 @@
 """
-Code for generalized cumulant decomposition
+Code for generalized Wick decomposition
 """
 # %%
 from pprint import pprint
@@ -10,6 +10,10 @@ from itertools import chain, combinations
 import numpy as np
 from sympy.utilities.iterables import multiset_partitions
 from dataclasses import dataclass
+
+# # Hack to make printing better
+# class frozenset(frozenset):
+#     __repr__ = lambda s: repr(set(s))
 
 
 Block = frozenset[int]
@@ -135,27 +139,54 @@ for n in range(1, 6):
 
 # %%
 # Note this works on any T but the typechecker gets confused if you annotate with T :(
+# TBD: caller could mutate cache by accident, this is a bit sad
 @lru_cache(maxsize=None)
-def powerset(it: Iterable[int], max: Optional[int] = None, min=1) -> list[tuple[int, ...]]:
+def powerset(it: Iterable[int], max: Optional[int] = None, min=1) -> list[frozenset[int]]:
     """Return all subsets of it with length between min and max, inclusive."""
     items = list(it)
     if max is None:
         max = len(items)
-    return [s for r in range(min, max + 1) for s in combinations(items, r)]
+    return [frozenset(s) for r in range(min, max + 1) for s in combinations(items, r)]
 
 
-assert list(powerset(range(1, 4))) == [(1,), (2,), (3,), (1, 2), (1, 3), (2, 3), (1, 2, 3)]
-assert list(powerset(range(1, 4), min=0)) == [(), (1,), (2,), (3,), (1, 2), (1, 3), (2, 3), (1, 2, 3)]
-assert list(powerset(range(1, 4), max=2, min=1)) == [(1,), (2,), (3,), (1, 2), (1, 3), (2, 3)]
+assert powerset(range(1, 4)) == [frozenset(s) for s in [(1,), (2,), (3,), (1, 2), (1, 3), (2, 3), (1, 2, 3)]]
+assert powerset(range(1, 4), min=0) == [frozenset(s) for s in [(), (1,), (2,), (3,), (1, 2), (1, 3), (2, 3), (1, 2, 3)]]
+assert powerset(range(1, 4), max=2, min=1) == [frozenset(s) for s in [(1,), (2,), (3,), (1, 2), (1, 3), (2, 3)]]
 # %%
 Expectation = frozenset[frozenset[int]]
 Xs = frozenset[int]
 Term = tuple[Expectation, Xs]
 
 
-def mul_expectation(e1: Expectation, e2: Expectation):
-    """Handle E_w|x E_yz = E_w|x|yz. Can have empty E_{} as well."""
-    # invariant: each variable only appears once in all parts
+def show_term(ex: Expectation, xs: Xs, coef: int) -> str:
+    """Debugging printout of a term."""
+    if coef == 1:
+        s = ""
+    elif coef == -1:
+        s = "-"
+    else:
+        s = f"{coef:+0d}"
+    xstr = "".join(f"x{i}" for i in xs) if xs else ""
+    if any(ex):
+        subscr = "|".join("".join(str(x) for x in subex) for subex in ex)
+        s += "E_" + subscr
+    if any(ex) and xstr:
+        s += f"[{xstr}]"
+    else:
+        s += " " + xstr
+    return s
+
+
+def show_terms(terms: dict[Term, int]) -> str:
+    """Debugging printout of a term."""
+    return " ".join(show_term(ex, xs, coef) for (ex, xs), coef in terms.items())
+
+
+def mul_expectation_debug(e1: Expectation, e2: Expectation) -> Expectation:
+    """Handle E_w|x E_yz = E_w|x|yz. Empty expectations are omitted.
+
+    This version is slower but sanity checks that each variable only appears once in all parts.
+    """
     out = set()
     seen = set()
     for term in chain(e1, e2):
@@ -166,38 +197,36 @@ def mul_expectation(e1: Expectation, e2: Expectation):
         if term:
             out.add(term)
     return frozenset(out)
-    # return frozenset([e for e in e1 | e2 if e]) # fast version
+
+
+def mul_expectation(e1: Expectation, e2: Expectation) -> Expectation:
+    """Handle E_w|x E_yz = E_w|x|yz. Empty expectations are omitted."""
+    return frozenset(term for term in chain(e1, e2) if term)
 
 
 e1 = frozenset([frozenset([1, 2])])
 e2 = frozenset([frozenset([3])])
 assert mul_expectation(e1, e2) == frozenset({frozenset({3}), frozenset({1, 2})})
 
+e1 = frozenset([frozenset([1, 5])])
+e2 = frozenset([frozenset([])])
+assert mul_expectation(e1, e2) == frozenset({frozenset({1, 5})})
 
 # %%
 
-
+# tbd: do we need remove_zeros here? Not sure coefs can actually be zero
+@lru_cache(maxsize=None)
 def wick(x_s: Block) -> dict[Term, int]:
     """Return a Wick decomposition such that the terms sum to the product of x_s."""
+    if not x_s:
+        return {(frozenset([frozenset()]), frozenset()): 1}
 
-    # Use an inner function to avoid passing x_s around
-    @lru_cache(maxsize=None)
-    def _wick(s: Block) -> dict[Term, int]:
-        print(f"_wick: {s=}")
-        if not s:
-            return {(frozenset([frozenset()]), frozenset()): 1}
-
-        terms: dict[Term, int] = defaultdict(int)
-        terms[(frozenset([frozenset()]), s)] = 1  # product over all x_i
-        for subset in powerset(s, min=0, max=len(s) - 1):  # strict subsets
-            rest = frozenset([frozenset([i for i in s if i not in subset])])  # [n] \ S
-            # distribute expectation over rest into each subterm by linearity of expectation
-            for (sub_ex, sub_xs), sub_coef in _wick(frozenset(subset)).items():
-                key = mul_expectation(rest, sub_ex), sub_xs
-                terms[key] -= sub_coef
-        return terms
-
-    return remove_zeros(_wick(x_s))
+    terms: dict[Term, int] = defaultdict(int, {(frozenset([frozenset()]), x_s): 1})
+    for subset in powerset(x_s, min=0, max=len(x_s) - 1):  # strict subsets
+        for (sub_ex, sub_xs), sub_coef in wick(subset).items():
+            term = mul_expectation(frozenset([x_s - subset]), sub_ex), sub_xs
+            terms[term] -= sub_coef
+    return terms
 
 
 # %%
@@ -236,12 +265,24 @@ expected = {
     (frozenset([frozenset([2, 3])]), frozenset([1])): -1,
     (frozenset([frozenset([2]), frozenset([3])]), frozenset([1])): 2,
     (frozenset([frozenset([1, 3])]), frozenset([2])): -1,
-    (frozenset([frozenset([1]), frozenset([3])]), frozenset([1])): 2,
+    (frozenset([frozenset([1]), frozenset([3])]), frozenset([2])): 2,
     (frozenset([frozenset([1, 2])]), frozenset([3])): -1,
     (frozenset([frozenset([1]), frozenset([2])]), frozenset([3])): 2,
     (frozenset([frozenset([1, 2, 3])]), frozenset([])): -1,
+    (frozenset([frozenset([1]), frozenset([2]), frozenset([3])]), frozenset([])): -6,
+    (frozenset([frozenset([1]), frozenset([2, 3])]), frozenset([])): 2,
+    (frozenset([frozenset([2]), frozenset([1, 3])]), frozenset([])): 2,
+    (frozenset([frozenset([3]), frozenset([1, 2])]), frozenset([])): 2,
 }
 actual = wick(frozenset([1, 2, 3]))
 assert actual == expected, actual
 
+# %%
+import time
+
+# brutally slow for n > 10
+for i in range(15):
+    start = time.time()
+    wick(frozenset(range(i)))
+    print(time.time() - start)
 # %%
