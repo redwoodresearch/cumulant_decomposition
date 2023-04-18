@@ -3,12 +3,14 @@ Code for generalized cumulant decomposition
 """
 # %%
 from pprint import pprint
-from typing import cast, TypeVar, Sequence
+from typing import cast, TypeVar, Sequence, Iterable, Optional
 from collections import defaultdict
 from functools import lru_cache
-
+from itertools import chain, combinations
 import numpy as np
 from sympy.utilities.iterables import multiset_partitions
+from dataclasses import dataclass
+
 
 Block = frozenset[int]
 Partition = frozenset[Block]
@@ -130,3 +132,97 @@ def joint_coefs(n: int):
 # (In SymPy ordering the joint is the first row)
 for n in range(1, 6):
     assert (matrix_form(n)[0] == joint_coefs(n)).all()
+
+# %%
+# Note this works on any T but the typechecker gets confused if you annotate with T :(
+@lru_cache(maxsize=None)
+def powerset(it: Iterable[int], max: Optional[int] = None, min=1) -> list[tuple[int, ...]]:
+    """Return all subsets of it with length between min and max, inclusive."""
+    items = list(it)
+    if max is None:
+        max = len(items)
+    return [s for r in range(min, max + 1) for s in combinations(items, r)]
+
+
+assert list(powerset(range(1, 4))) == [(1,), (2,), (3,), (1, 2), (1, 3), (2, 3), (1, 2, 3)]
+assert list(powerset(range(1, 4), min=0)) == [(), (1,), (2,), (3,), (1, 2), (1, 3), (2, 3), (1, 2, 3)]
+assert list(powerset(range(1, 4), max=2, min=1)) == [(1,), (2,), (3,), (1, 2), (1, 3), (2, 3)]
+# %%
+Expectation = frozenset[frozenset[int]]
+Xs = frozenset[int]
+Term = tuple[Expectation, Xs]
+
+
+def mul_expectation(e1: Expectation, e2: Expectation):
+    """Handle E_w|x E_yz E_{} = E_w|x|yz."""
+    return frozenset([e for e in e1 | e2 if e])
+
+
+def wick(x_s: Block) -> dict[Term, int]:
+    """Return a Wick decomposition such that the terms sum to the product of x_s."""
+
+    # Use an inner function to avoid passing x_s around
+    @lru_cache(maxsize=None)
+    def _wick(s: Block) -> dict[Term, int]:
+        print(f"_wick: {s=}")
+        if not s:
+            return {(frozenset([frozenset()]), frozenset()): 1}
+
+        terms: dict[Term, int] = defaultdict(int)
+        terms[(frozenset([frozenset()]), x_s)] = 1  # product over all x_i
+        for subset in powerset(s, min=0, max=len(s) - 1):  # strict subsets
+            rest = frozenset([frozenset([i for i in x_s if i not in subset])])  # [n] \ S
+            # distribute rest into each subterm by linearity of expectation
+            for (sub_ex, sub_xs), sub_coef in _wick(frozenset(subset)).items():
+                key = mul_expectation(rest, sub_ex), sub_xs
+                terms[key] -= sub_coef
+        return terms
+
+    return remove_zeros(_wick(x_s))
+
+
+# %%
+# N = 0
+assert wick(frozenset([])) == {(frozenset([frozenset()]), frozenset([])): 1}
+
+# %%
+# N = 1
+expected = {
+    (frozenset([frozenset()]), frozenset([1])): 1,  # x_1
+    (frozenset([frozenset([1])]), frozenset()): -1,  # E_(X_1)
+}
+actual = wick(frozenset([1]))
+assert actual == expected, actual
+
+# %%
+# N = 2
+expected = {
+    (frozenset([frozenset()]), frozenset([1, 2])): 1,
+    (frozenset([frozenset([1, 2])]), frozenset()): -1,
+    (frozenset([frozenset([2])]), frozenset([1])): -1,
+    (frozenset([frozenset([1])]), frozenset([2])): -1,
+    (frozenset([frozenset([1]), frozenset([2])]), frozenset()): 2,
+}
+actual = wick(frozenset([1, 2]))
+assert actual == expected, actual
+
+
+# %%
+# N = 3
+expected = {
+    (frozenset([frozenset()]), frozenset([1, 2, 3])): 1,
+    (frozenset([frozenset([3])]), frozenset([1, 2])): -1,
+    (frozenset([frozenset([2])]), frozenset([1, 3])): -1,
+    (frozenset([frozenset([1])]), frozenset([2, 3])): -1,
+    (frozenset([frozenset([2, 3])]), frozenset([1])): -1,
+    (frozenset([frozenset([2]), frozenset([3])]), frozenset([1])): 2,
+    (frozenset([frozenset([1, 3])]), frozenset([2])): -1,
+    (frozenset([frozenset([1]), frozenset([3])]), frozenset([1])): 2,
+    (frozenset([frozenset([1, 2])]), frozenset([3])): -1,
+    (frozenset([frozenset([1]), frozenset([2])]), frozenset([3])): 2,
+    (frozenset([frozenset([1, 2, 3])]), frozenset([])): -1,
+}
+actual = wick(frozenset([1, 2, 3]))
+assert actual == expected, actual
+
+# %%
